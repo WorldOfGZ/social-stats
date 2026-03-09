@@ -1,0 +1,19 @@
+# Copy this file to config.yaml and adapt values for your use case.
+server:
+  host: 0.0.0.0
+  port: 8000
+  timeout_seconds: 12
+
+cache:
+  enabled: true
+  refresh_seconds: 3600
+
+targets:
+  instagram:
+    - nasa
+  youtube:
+    - "@GoogleDevelopers"
+  github_users:
+    - torvalds
+  github_repos:
+    - "psf/requests"
