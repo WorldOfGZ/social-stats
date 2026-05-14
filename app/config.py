@@ -23,6 +23,7 @@ class TargetsConfig:
     youtube: list[str] = field(default_factory=list)
     github_users: list[str] = field(default_factory=list)
     github_repos: list[str] = field(default_factory=list)
+    dockerhub_images: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -81,6 +82,10 @@ def load_config(path: str | Path) -> AppConfig:
         youtube=_as_string_list(targets_raw.get("youtube"), "targets.youtube"),
         github_users=_as_string_list(targets_raw.get("github_users"), "targets.github_users"),
         github_repos=_as_string_list(targets_raw.get("github_repos"), "targets.github_repos"),
+        dockerhub_images=_as_string_list(
+            targets_raw.get("dockerhub_images"),
+            "targets.dockerhub_images",
+        ),
     )
 
     cache = CacheConfig(

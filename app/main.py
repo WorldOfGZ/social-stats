@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from app.cache import InMemoryCache
+from app.clients.dockerhub_client import fetch_dockerhub_image_stats
 from app.clients.github_client import fetch_github_repo_stats, fetch_github_user_stats
 from app.clients.instagram_client import fetch_instagram_stats
 from app.clients.youtube_client import fetch_youtube_stats
@@ -82,12 +83,23 @@ async def aggregate_stats() -> dict[str, Any]:
         _wrap_call(lambda full_repo=r: _get_github_repo_from_full_name(full_repo, config))
         for r in config.targets.github_repos
     ]
+    dockerhub_jobs = [
+        _wrap_call(lambda full_image=i: _get_dockerhub_image_from_full_name(full_image, config))
+        for i in config.targets.dockerhub_images
+    ]
 
-    instagram_results, youtube_results, github_user_results, github_repo_results = await asyncio.gather(
+    (
+        instagram_results,
+        youtube_results,
+        github_user_results,
+        github_repo_results,
+        dockerhub_results,
+    ) = await asyncio.gather(
         _run_jobs(instagram_jobs),
         _run_jobs(youtube_jobs),
         _run_jobs(github_user_jobs),
         _run_jobs(github_repo_jobs),
+        _run_jobs(dockerhub_jobs),
     )
 
     return {
@@ -96,6 +108,7 @@ async def aggregate_stats() -> dict[str, Any]:
         "youtube": youtube_results,
         "github_users": github_user_results,
         "github_repos": github_repo_results,
+        "dockerhub_images": dockerhub_results,
     }
 
 
@@ -131,6 +144,15 @@ async def github_repo_stats(owner: str, repo: str) -> dict[str, Any]:
     config = _get_config()
     try:
         return await _get_github_repo_stats(owner, repo, config)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/stats/dockerhub/{namespace}/{image}")
+async def dockerhub_image_stats(namespace: str, image: str) -> dict[str, Any]:
+    config = _get_config()
+    try:
+        return await _get_dockerhub_image_stats(namespace, image, config)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -181,6 +203,25 @@ async def _get_github_repo_from_full_name(full_repo: str, config: Any) -> dict[s
     return await _get_github_repo_stats(owner, repo, config)
 
 
+async def _get_dockerhub_image_stats(namespace: str, image: str, config: Any) -> dict[str, Any]:
+    timeout = config.server.timeout_seconds
+    cache_key = f"dockerhub:{namespace.lower()}/{image.lower()}"
+    return await _cache_get(
+        key=cache_key,
+        config=config,
+        fetcher=lambda: fetch_dockerhub_image_stats(namespace, image, timeout),
+    )
+
+
+async def _get_dockerhub_image_from_full_name(full_image: str, config: Any) -> dict[str, Any]:
+    if "/" not in full_image:
+        raise ValueError(
+            f"Invalid Docker Hub image value '{full_image}'. Expected format namespace/image."
+        )
+    namespace, image = full_image.split("/", maxsplit=1)
+    return await _get_dockerhub_image_stats(namespace, image, config)
+
+
 async def _cache_get(
     key: str,
     config: Any,
@@ -207,6 +248,7 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                 "youtube": [],
                 "github_users": [],
                 "github_repos": [],
+            "dockerhub_images": [],
         }
         if config is not None:
                 config_targets = {
@@ -214,6 +256,7 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                         "youtube": config.targets.youtube,
                         "github_users": config.targets.github_users,
                         "github_repos": config.targets.github_repos,
+                "dockerhub_images": config.targets.dockerhub_images,
                 }
 
         # Keep the UI self-contained to make deployment and usage simple.
@@ -325,6 +368,10 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                         <input id=\"ig\" placeholder=\"instagram username\" />
                         <button onclick=\"callApi('/stats/instagram/' + encodeURIComponent(v('ig')))\">Instagram</button>
                     </div>
+                    <div class="row">
+                        <input id="dhi" placeholder="namespace/image" />
+                        <button onclick="callDockerImage()">Docker Hub Image</button>
+                    </div>
                     <div class=\"row\">
                         <input id=\"yt\" placeholder=\"youtube @handle or UC...\" />
                         <button onclick=\"callApi('/stats/youtube/' + encodeURIComponent(v('yt')))\">YouTube</button>
@@ -367,6 +414,10 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                     const parts = r.split('/');
                     if (parts.length === 2) addButton('GH repo ' + r, '/stats/github/repo/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
                 }});
+                targets.dockerhub_images.forEach((i) => {{
+                    const parts = i.split('/');
+                    if (parts.length === 2) addButton('Docker ' + i, '/stats/dockerhub/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
+                }});
             }}
 
             async function callApi(path) {{
@@ -394,6 +445,16 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                     return;
                 }}
                 callApi('/stats/github/repo/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
+            }}
+
+            function callDockerImage() {{
+                const raw = v('dhi');
+                const parts = raw.split('/');
+                if (parts.length !== 2 || !parts[0] || !parts[1]) {{
+                    out.textContent = 'Docker image format must be namespace/image';
+                    return;
+                }}
+                callApi('/stats/dockerhub/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
             }}
 
             async function clearCacheAndRefresh() {{

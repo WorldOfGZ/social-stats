@@ -17,3 +17,5 @@ targets:
     - torvalds
   github_repos:
     - "psf/requests"
+  dockerhub_images:
+    - "library/node"
