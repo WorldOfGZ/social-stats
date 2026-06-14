@@ -12,6 +12,7 @@ venv/
 
 # Local runtime data
 config.yaml
+.state/
 
 # OS/Editor
 .DS_Store

@@ -3,18 +3,26 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Sequence
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.cache import InMemoryCache
 from app.clients.dockerhub_client import fetch_dockerhub_image_stats
 from app.clients.github_client import fetch_github_repo_stats, fetch_github_user_stats
-from app.clients.instagram_client import fetch_instagram_stats
 from app.clients.youtube_client import fetch_youtube_stats
 from app.config import ConfigError, load_config
+from app.clients.instagram_client import (
+    clear_instagram_session,
+    begin_instagram_session_login,
+    complete_instagram_two_factor_login,
+    fetch_instagram_stats,
+    get_instagram_snapshot_status,
+    get_instagram_session_status,
+)
 
 app = FastAPI(
     title="social-stats",
@@ -24,6 +32,14 @@ app = FastAPI(
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
 CACHE = InMemoryCache()
+
+# Per-service cache TTLs (seconds).
+_TTL_INSTAGRAM = 86400
+_TTL_YOUTUBE = 3600
+_TTL_GITHUB_USERS = 3600
+_TTL_GITHUB_REPOS = 3600
+_TTL_DOCKERHUB = 7200
+_MIN_INSTAGRAM_TIMEOUT_SECONDS = 30
 
 
 def _get_config():
@@ -60,7 +76,13 @@ async def index() -> str:
         config = None
         config_error = str(exc)
 
-    return _build_test_ui(config_path=str(CONFIG_PATH), config=config, config_error=config_error)
+    instagram_status = get_instagram_session_status(config) if config is not None else None
+    return _build_test_ui(
+        config_path=str(CONFIG_PATH),
+        config=config,
+        config_error=config_error,
+        instagram_status=instagram_status,
+    )
 
 
 @app.get("/stats")
@@ -117,8 +139,24 @@ async def instagram_stats(username: str) -> dict[str, Any]:
     config = _get_config()
     try:
         return await _get_instagram_stats(username, config)
+    except ValueError as exc:
+        detail = str(exc)
+        lowered = detail.lower()
+        if "upstream request failed" in lowered or "connection error" in lowered or "invalid request" in lowered:
+            raise HTTPException(status_code=502, detail=detail) from exc
+        if "not configured" in lowered:
+            raise HTTPException(status_code=503, detail=detail) from exc
+        if "timed out" in lowered:
+            raise HTTPException(status_code=504, detail=detail) from exc
+        if "private" in lowered:
+            raise HTTPException(status_code=403, detail=detail) from exc
+        if "rate limited" in lowered:
+            raise HTTPException(status_code=429, detail=detail) from exc
+        if "requires login" in lowered:
+            raise HTTPException(status_code=401, detail=detail) from exc
+        raise HTTPException(status_code=404, detail=detail) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/stats/youtube/{identifier}")
@@ -158,11 +196,13 @@ async def dockerhub_image_stats(namespace: str, image: str) -> dict[str, Any]:
 
 
 async def _get_instagram_stats(username: str, config: Any) -> dict[str, Any]:
-    timeout = config.server.timeout_seconds
+    timeout = max(config.server.timeout_seconds, _MIN_INSTAGRAM_TIMEOUT_SECONDS)
     return await _cache_get(
         key=f"instagram:{username.lower()}",
+        ttl=_TTL_INSTAGRAM,
         config=config,
-        fetcher=lambda: fetch_instagram_stats(username, timeout),
+        fetcher=lambda: fetch_instagram_stats(username, timeout, config),
+        allow_stale_on_error=True,
     )
 
 
@@ -170,6 +210,7 @@ async def _get_youtube_stats(identifier: str, config: Any) -> dict[str, Any]:
     timeout = config.server.timeout_seconds
     return await _cache_get(
         key=f"youtube:{identifier.lower()}",
+        ttl=_TTL_YOUTUBE,
         config=config,
         fetcher=lambda: fetch_youtube_stats(identifier, timeout),
     )
@@ -179,6 +220,7 @@ async def _get_github_user_stats(username: str, config: Any) -> dict[str, Any]:
     timeout = config.server.timeout_seconds
     return await _cache_get(
         key=f"github_user:{username.lower()}",
+        ttl=_TTL_GITHUB_USERS,
         config=config,
         fetcher=lambda: fetch_github_user_stats(username, timeout),
     )
@@ -189,6 +231,7 @@ async def _get_github_repo_stats(owner: str, repo: str, config: Any) -> dict[str
     cache_key = f"github_repo:{owner.lower()}/{repo.lower()}"
     return await _cache_get(
         key=cache_key,
+        ttl=_TTL_GITHUB_REPOS,
         config=config,
         fetcher=lambda: fetch_github_repo_stats(owner, repo, timeout),
     )
@@ -208,6 +251,7 @@ async def _get_dockerhub_image_stats(namespace: str, image: str, config: Any) ->
     cache_key = f"dockerhub:{namespace.lower()}/{image.lower()}"
     return await _cache_get(
         key=cache_key,
+        ttl=_TTL_DOCKERHUB,
         config=config,
         fetcher=lambda: fetch_dockerhub_image_stats(namespace, image, timeout),
     )
@@ -226,14 +270,75 @@ async def _cache_get(
     key: str,
     config: Any,
     fetcher: Callable[[], Awaitable[dict[str, Any]]],
+    ttl: int | None = None,
+    allow_stale_on_error: bool = False,
 ) -> dict[str, Any]:
     if not config.cache.enabled:
-        return await fetcher()
+        value = await fetcher()
+        payload = dict(value)
+        payload["last_fresh_crawl"] = datetime.now(timezone.utc).isoformat()
+        payload["stale"] = False
+        return payload
     return await CACHE.get_or_fetch(
         key=key,
-        refresh_seconds=config.cache.refresh_seconds,
+        refresh_seconds=ttl if ttl is not None else config.cache.refresh_seconds,
         fetcher=fetcher,
+        allow_stale_on_error=allow_stale_on_error,
     )
+
+
+
+@app.get("/instagram/session/status")
+async def instagram_session_status() -> dict[str, Any]:
+    config = _get_config()
+    return get_instagram_session_status(config)
+
+
+@app.post("/instagram/session/login")
+async def instagram_session_login(payload: dict[str, Any]) -> JSONResponse:
+    config = _get_config()
+    try:
+        pending_token = str(payload.get("pending_token", "")).strip()
+        two_factor_code = str(payload.get("two_factor_code", "")).strip()
+        if pending_token and two_factor_code:
+            result = await complete_instagram_two_factor_login(
+                config,
+                pending_token=pending_token,
+                two_factor_code=two_factor_code,
+            )
+            return JSONResponse(status_code=200, content=result)
+
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
+        result = await begin_instagram_session_login(
+            config,
+            username=username,
+            password=password,
+            timeout_seconds=config.server.timeout_seconds,
+        )
+        if result.get("requires_two_factor"):
+            return JSONResponse(status_code=202, content=result)
+        return JSONResponse(status_code=200, content=result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/instagram/session")
+async def delete_instagram_session() -> dict[str, Any]:
+    config = _get_config()
+    return clear_instagram_session(config)
+
+
+@app.get("/instagram/snapshot/status")
+async def instagram_snapshot_status() -> dict[str, Any]:
+    config = _get_config()
+    return get_instagram_snapshot_status(config)
+
+
+@app.get("/instagram/snapshot/status/{username}")
+async def instagram_snapshot_status_for_user(username: str) -> dict[str, Any]:
+    config = _get_config()
+    return get_instagram_snapshot_status(config, username=username)
 
 
 async def _run_jobs(jobs: Sequence[Awaitable[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -242,25 +347,32 @@ async def _run_jobs(jobs: Sequence[Awaitable[dict[str, Any]]]) -> list[dict[str,
     return await asyncio.gather(*jobs)
 
 
-def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> str:
-        config_targets: dict[str, list[str]] = {
-                "instagram": [],
-                "youtube": [],
-                "github_users": [],
-                "github_repos": [],
-            "dockerhub_images": [],
+def _build_test_ui(
+    config_path: str,
+    config: Any,
+    config_error: str | None,
+    instagram_status: dict[str, Any] | None,
+) -> str:
+    config_targets: dict[str, list[str]] = {
+        "instagram": [],
+        "youtube": [],
+        "github_users": [],
+        "github_repos": [],
+        "dockerhub_images": [],
+    }
+    if config is not None:
+        config_targets = {
+            "instagram": config.targets.instagram,
+            "youtube": config.targets.youtube,
+            "github_users": config.targets.github_users,
+            "github_repos": config.targets.github_repos,
+            "dockerhub_images": config.targets.dockerhub_images,
         }
-        if config is not None:
-                config_targets = {
-                        "instagram": config.targets.instagram,
-                        "youtube": config.targets.youtube,
-                        "github_users": config.targets.github_users,
-                        "github_repos": config.targets.github_repos,
-                "dockerhub_images": config.targets.dockerhub_images,
-                }
 
-        # Keep the UI self-contained to make deployment and usage simple.
-        return f"""<!doctype html>
+    instagram_status_json = json.dumps(instagram_status or {})
+
+    # Keep the UI self-contained to make deployment and usage simple.
+    return f"""<!doctype html>
 <html lang=\"en\">
     <head>
         <meta charset=\"utf-8\" />
@@ -352,6 +464,27 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
 
             <div class=\"grid\">
                 <section class=\"card\">
+                    <h2>Instagram session</h2>
+                    <div id=\"instagram-warning\" class=\"warn\"></div>
+                    <div class=\"row\">
+                            <input id="ig-user" placeholder="instagram username" />
+                    </div>
+                    <div class=\"row\">
+                            <input id="ig-pass" type="password" placeholder="instagram password" />
+                        </div>
+                        <div class="row">
+                            <input id="ig-2fa" placeholder="2FA code, if needed" />
+                    </div>
+                    <div class=\"row\">
+                            <button onclick="startInstagramLogin()">Login</button>
+                            <button onclick="completeInstagramTwoFactor()">Complete 2FA</button>
+                        <button onclick=\"refreshInstagramSessionStatus()\">Refresh Status</button>
+                        <button onclick=\"clearInstagramSession()\">Clear Session</button>
+                    </div>
+                        <p class="muted">Log in here to create the Instagram session directly. It is stored under <code>.state/</code> and ignored by git.</p>
+                </section>
+
+                <section class=\"card\">
                     <h2>From config.yaml</h2>
                     <div class=\"row\">
                         <button onclick=\"callApi('/health')\">Health</button>
@@ -368,9 +501,9 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                         <input id=\"ig\" placeholder=\"instagram username\" />
                         <button onclick=\"callApi('/stats/instagram/' + encodeURIComponent(v('ig')))\">Instagram</button>
                     </div>
-                    <div class="row">
-                        <input id="dhi" placeholder="namespace/image" />
-                        <button onclick="callDockerImage()">Docker Hub Image</button>
+                    <div class=\"row\">
+                        <input id=\"dhi\" placeholder=\"namespace/image\" />
+                        <button onclick=\"callDockerImage()\">Docker Hub Image</button>
                     </div>
                     <div class=\"row\">
                         <input id=\"yt\" placeholder=\"youtube @handle or UC...\" />
@@ -392,6 +525,7 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
 
         <script>
             const targets = {json.dumps(config_targets)};
+            const instagramStatus = {instagram_status_json};
             const out = document.getElementById('out');
 
             function v(id) {{
@@ -418,6 +552,20 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                     const parts = i.split('/');
                     if (parts.length === 2) addButton('Docker ' + i, '/stats/dockerhub/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
                 }});
+            }}
+
+            function renderInstagramStatus(status) {{
+                const box = document.getElementById('instagram-warning');
+                if (!box) {{
+                    return;
+                }}
+                if (!status || !status.configured) {{
+                        const pending = status && status.pending_logins ? ' A login step may still be pending.' : '';
+                        box.textContent = (status && status.message) ? status.message + pending : 'Instagram crawling is not configured. Use the login form above.';
+                    return;
+                }}
+                    const pendingNote = status.pending_logins ? ' Pending login steps: ' + status.pending_logins + '.' : '';
+                    box.textContent = 'Instagram session loaded for @' + status.username + '. Last refreshed: ' + (status.updated_at || 'unknown') + '.' + pendingNote;
             }}
 
             async function callApi(path) {{
@@ -457,6 +605,103 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                 callApi('/stats/dockerhub/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]));
             }}
 
+            async function startInstagramLogin() {{
+                const username = v('ig-user');
+                const password = v('ig-pass');
+                if (!username || !password) {{
+                    out.textContent = 'Enter an Instagram username and password.';
+                    return;
+                }}
+                out.textContent = 'Logging in to Instagram ...';
+                try {{
+                    const response = await fetch('/instagram/session/login', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ username, password }}),
+                    }});
+                    const text = await response.text();
+                    let body = text;
+                    try {{ body = JSON.parse(text); }} catch (_err) {{}}
+                    const result = {{ status: response.status, path: '/instagram/session/login', body }};
+                    out.textContent = JSON.stringify(result, null, 2);
+                    if (response.ok || response.status === 202) {{
+                        instagramStatus.pending_token = body.pending_token || '';
+                        instagramStatus.username = body.username || username;
+                        renderInstagramStatus(body);
+                        if (body.requires_two_factor) {{
+                            document.getElementById('ig-2fa').focus();
+                        }}
+                    }}
+                }} catch (err) {{
+                    out.textContent = String(err);
+                }}
+            }}
+
+            async function completeInstagramTwoFactor() {{
+                const pendingToken = instagramStatus.pending_token || '';
+                const twoFactorCode = v('ig-2fa');
+                if (!pendingToken) {{
+                    out.textContent = 'Start the Instagram login first.';
+                    return;
+                }}
+                if (!twoFactorCode) {{
+                    out.textContent = 'Enter the 2FA code from Instagram.';
+                    return;
+                }}
+                out.textContent = 'Completing Instagram 2FA ...';
+                try {{
+                    const response = await fetch('/instagram/session/login', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ pending_token: pendingToken, two_factor_code: twoFactorCode }}),
+                    }});
+                    const text = await response.text();
+                    let body = text;
+                    try {{ body = JSON.parse(text); }} catch (_err) {{}}
+                    const result = {{ status: response.status, path: '/instagram/session/login', body }};
+                    out.textContent = JSON.stringify(result, null, 2);
+                    if (response.ok) {{
+                        instagramStatus.pending_token = '';
+                        renderInstagramStatus(body);
+                    }}
+                }} catch (err) {{
+                    out.textContent = String(err);
+                }}
+            }}
+
+            async function clearInstagramSession() {{
+                out.textContent = 'Clearing Instagram session ...';
+                try {{
+                    const response = await fetch('/instagram/session', {{ method: 'DELETE' }});
+                    const text = await response.text();
+                    let body = text;
+                    try {{ body = JSON.parse(text); }} catch (_err) {{}}
+                    const result = {{ status: response.status, path: '/instagram/session', body }};
+                    out.textContent = JSON.stringify(result, null, 2);
+                    Object.assign(instagramStatus, body);
+                    renderInstagramStatus(body);
+                }} catch (err) {{
+                    out.textContent = String(err);
+                }}
+            }}
+
+            async function refreshInstagramSessionStatus() {{
+                out.textContent = 'Refreshing Instagram session status ...';
+                try {{
+                    const response = await fetch('/instagram/session/status');
+                    const text = await response.text();
+                    let body = text;
+                    try {{ body = JSON.parse(text); }} catch (_err) {{}}
+                    out.textContent = JSON.stringify({{ status: response.status, path: '/instagram/session/status', body }}, null, 2);
+                    if (response.ok) {{
+                        Object.assign(instagramStatus, body);
+                        renderInstagramStatus(body);
+                    }}
+                }} catch (err) {{
+                    out.textContent = String(err);
+                }}
+            }}
+
             async function clearCacheAndRefresh() {{
                 out.textContent = 'Clearing cache ...';
                 try {{
@@ -466,12 +711,14 @@ def _build_test_ui(config_path: str, config: Any, config_error: str | None) -> s
                     try {{ clearBody = JSON.parse(clearText); }} catch (_err) {{}}
                     out.textContent = JSON.stringify({{ status: clearRes.status, path: '/cache/clear', body: clearBody }}, null, 2);
                     await callApi('/stats');
+                    await refreshInstagramSessionStatus();
                 }} catch (err) {{
                     out.textContent = String(err);
                 }}
             }}
 
             seedButtons();
+            renderInstagramStatus(instagramStatus);
         </script>
     </body>
 </html>

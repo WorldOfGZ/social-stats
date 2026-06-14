@@ -2,8 +2,11 @@ services:
   social-stats-api:
     build: .
     container_name: social-stats-api
+    environment:
+      TZ: Europe/Berlin
     ports:
       - "8000:8000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      - ./.state:/app/.state
     restart: unless-stopped

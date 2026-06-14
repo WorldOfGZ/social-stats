@@ -143,6 +143,9 @@ Caching behavior:
 - repeated calls inside this window reuse cached data instead of scraping/API calls again
 - clear cache manually with `POST /cache/clear` to force next call to scrape/API fetch again
 
+Instagram access requires a logged-in Instaloader session. Use the local tester at `http://localhost:8000/` to sign in with your Instagram credentials; the session is stored in `.state/` and ignored by git.
+When running with Docker Compose, the `.state/` folder is mounted into the container, so the session file is visible in the workspace too.
+
 ## 5. Run With Docker
 
 ```powershell
@@ -226,12 +229,16 @@ After update, validate health:
 - `GET /stats/github/user/{username}`
 - `GET /stats/github/repo/{owner}/{repo}`
 - `GET /stats/dockerhub/{namespace}/{image}`
+- `GET /instagram/session/status`
+- `POST /instagram/session/login`
+- `DELETE /instagram/session`
 
 ## 8. Notes And Limits
 
 - Social websites change HTML/JSON structures over time; scraping selectors may require updates.
 - Public/no-key access can be rate limited by providers.
 - Private or restricted accounts are not fully readable by design.
+- Instagram scraping is disabled until you sign in through the local tester.
 
 ## 9. Repository Files
 

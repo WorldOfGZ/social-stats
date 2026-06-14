@@ -8,6 +8,9 @@ cache:
   enabled: true
   refresh_seconds: 3600
 
+instagram:
+  session_file: .state/instagram.session
+
 targets:
   instagram:
     - nasa

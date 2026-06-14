@@ -33,10 +33,16 @@ class CacheConfig:
 
 
 @dataclass(slots=True)
+class InstagramConfig:
+    session_file: str = ".state/instagram.session"
+
+
+@dataclass(slots=True)
 class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     targets: TargetsConfig = field(default_factory=TargetsConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
+    instagram: InstagramConfig = field(default_factory=InstagramConfig)
 
 
 def _as_string_list(raw: object, key_name: str) -> list[str]:
@@ -63,6 +69,7 @@ def load_config(path: str | Path) -> AppConfig:
     server_raw = parsed.get("server", {})
     targets_raw = parsed.get("targets", {})
     cache_raw = parsed.get("cache", {})
+    instagram_raw = parsed.get("instagram", {})
 
     if not isinstance(server_raw, dict):
         raise ConfigError("'server' must be a mapping")
@@ -70,6 +77,8 @@ def load_config(path: str | Path) -> AppConfig:
         raise ConfigError("'targets' must be a mapping")
     if not isinstance(cache_raw, dict):
         raise ConfigError("'cache' must be a mapping")
+    if not isinstance(instagram_raw, dict):
+        raise ConfigError("'instagram' must be a mapping")
 
     server = ServerConfig(
         host=str(server_raw.get("host", "0.0.0.0")),
@@ -93,4 +102,8 @@ def load_config(path: str | Path) -> AppConfig:
         refresh_seconds=max(1, int(cache_raw.get("refresh_seconds", 3600))),
     )
 
-    return AppConfig(server=server, targets=targets, cache=cache)
+    instagram = InstagramConfig(
+        session_file=str(instagram_raw.get("session_file", ".state/instagram.session")),
+    )
+
+    return AppConfig(server=server, targets=targets, cache=cache, instagram=instagram)
