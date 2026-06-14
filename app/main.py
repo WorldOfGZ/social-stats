@@ -40,6 +40,7 @@ _TTL_GITHUB_USERS = 3600
 _TTL_GITHUB_REPOS = 3600
 _TTL_DOCKERHUB = 7200
 _MIN_INSTAGRAM_TIMEOUT_SECONDS = 30
+_MIN_INSTAGRAM_LOGIN_TIMEOUT_SECONDS = 60
 
 
 def _get_config():
@@ -314,7 +315,7 @@ async def instagram_session_login(payload: dict[str, Any]) -> JSONResponse:
             config,
             username=username,
             password=password,
-            timeout_seconds=config.server.timeout_seconds,
+            timeout_seconds=max(config.server.timeout_seconds, _MIN_INSTAGRAM_LOGIN_TIMEOUT_SECONDS),
         )
         if result.get("requires_two_factor"):
             return JSONResponse(status_code=202, content=result)

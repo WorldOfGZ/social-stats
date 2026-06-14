@@ -261,30 +261,37 @@ async def begin_instagram_session_login(
     cl = InstagramClient()
 
     try:
-        await cl.login(username, password)
-    except TwoFactorRequired:
-        token = _remember_pending_login(cl, username, password, session_file)
-        return {
-            "requires_two_factor": True,
-            "pending_token": token,
-            "username": username,
-            "message": "Instagram needs a 2FA code. Enter it in the UI to finish creating the session.",
-        }
-    except BadPassword:
-        raise ValueError("Invalid Instagram username or password.")
-    except ChallengeRequired as exc:
+        async with asyncio.timeout(float(timeout_seconds)):
+            try:
+                await cl.login(username, password)
+            except TwoFactorRequired:
+                token = _remember_pending_login(cl, username, password, session_file)
+                return {
+                    "requires_two_factor": True,
+                    "pending_token": token,
+                    "username": username,
+                    "message": "Instagram needs a 2FA code. Enter it in the UI to finish creating the session.",
+                }
+            except BadPassword:
+                raise ValueError("Invalid Instagram username or password.")
+            except ChallengeRequired as exc:
+                raise ValueError(
+                    f"Instagram requires account verification for '{username}'. "
+                    f"Log in from the official app or browser first, then retry: {exc}"
+                ) from exc
+            except (ReloginAttemptExceeded, FeedbackRequired, PleaseWaitFewMinutes) as exc:
+                raise ValueError(
+                    f"Instagram temporarily blocked the login for '{username}'. Wait and try again: {exc}"
+                ) from exc
+            except ClientConnectionError as exc:
+                raise ValueError(f"Instagram connection error for '{username}': {exc}") from exc
+            except ClientError as exc:
+                raise ValueError(f"Instagram login failed for '{username}': {exc}") from exc
+    except (asyncio.TimeoutError, TimeoutError):
         raise ValueError(
-            f"Instagram requires account verification for '{username}'. "
-            f"Log in from the official app or browser first, then retry: {exc}"
-        ) from exc
-    except (ReloginAttemptExceeded, FeedbackRequired, PleaseWaitFewMinutes) as exc:
-        raise ValueError(
-            f"Instagram temporarily blocked the login for '{username}'. Wait and try again: {exc}"
-        ) from exc
-    except ClientConnectionError as exc:
-        raise ValueError(f"Instagram connection error for '{username}': {exc}") from exc
-    except ClientError as exc:
-        raise ValueError(f"Instagram login failed for '{username}': {exc}") from exc
+            f"Instagram login timed out after {timeout_seconds}s. "
+            "Instagram may be slow or blocking the request."
+        )
 
     return _finish_login_and_save(cl, config, username, session_file)
 
