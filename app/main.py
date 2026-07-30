@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Sequence
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, get_log_file_path
 
 configure_logging()
 
@@ -74,6 +74,18 @@ async def health() -> dict[str, Any]:
 async def clear_cache() -> dict[str, Any]:
     removed = await CACHE.clear()
     return {"status": "ok", "cleared_entries": removed}
+
+
+@app.get("/logs/download")
+async def download_log() -> FileResponse:
+    log_file = get_log_file_path()
+    if not log_file.exists():
+        raise HTTPException(status_code=404, detail="No log file yet.")
+    return FileResponse(
+        path=log_file,
+        filename="social-stats.log",
+        media_type="text/plain",
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -499,6 +511,7 @@ def _build_test_ui(
                         <button onclick=\"callApi('/health')\">Health</button>
                         <button onclick=\"callApi('/stats')\">All Config Targets</button>
                         <button onclick=\"clearCacheAndRefresh()\">Clear Cache + Refresh</button>
+                        <button onclick=\"window.location.href='/logs/download'\">Download Server Log</button>
                     </div>
                     <div class=\"row\" id=\"buttons\"></div>
                     <p class=\"muted\">Buttons are generated from configured targets.</p>

@@ -8,6 +8,10 @@ from pathlib import Path
 _CONFIGURED = False
 
 
+def get_log_file_path() -> Path:
+    return Path(os.getenv("LOG_DIR", ".state")) / "app.log"
+
+
 def configure_logging() -> None:
     """Set up console + persistent rotating-file logging.
 
@@ -23,8 +27,8 @@ def configure_logging() -> None:
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    log_dir = Path(os.getenv("LOG_DIR", ".state"))
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = get_log_file_path()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
     formatter = logging.Formatter(
         fmt="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
@@ -34,7 +38,7 @@ def configure_logging() -> None:
     console_handler.setFormatter(formatter)
 
     file_handler = logging.handlers.RotatingFileHandler(
-        log_dir / "app.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+        log_file, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
     )
     file_handler.setFormatter(formatter)
 
