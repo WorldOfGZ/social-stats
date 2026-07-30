@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import secrets
 import time
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from aiograpi.exceptions import (
     ChallengeRequired,
     ClientConnectionError,
     ClientError,
+    ClientThrottledError,
     FeedbackRequired,
     LoginRequired,
     PleaseWaitFewMinutes,
@@ -24,6 +26,8 @@ from aiograpi.exceptions import (
     UserNotFound,
 )
 
+
+logger = logging.getLogger(__name__)
 
 SESSION_NOT_CONFIGURED_MESSAGE = (
     "Instagram account is not configured to crawl Instagram accounts. "
@@ -407,42 +411,59 @@ async def fetch_instagram_stats(username: str, timeout_seconds: int, config: Any
 
         _save_stats_snapshot(config, result["username"], result)
         cl.dump_settings(str(session_file))
+        logger.info(
+            "instagram fetch ok user=%s followers=%s following=%s posts=%s",
+            result["username"], result["followers"], result["following"], result["posts"],
+        )
         return result
 
     except (asyncio.TimeoutError, TimeoutError):
+        logger.warning("instagram fetch timeout user=%s timeout_seconds=%s", username, timeout_seconds)
         raise ValueError(f"Instagram fetch timed out for '{username}' after {timeout_seconds}s.")
     except UserNotFound:
+        logger.warning("instagram user not found user=%s", username)
         raise ValueError(f"Instagram user not found: {username}")
     except LoginRequired:
+        logger.error("instagram session invalid or expired user=%s", username)
         raise ValueError(
             "Instagram session is not configured or has expired. "
             "Open http://localhost:8000/ and log in again."
         )
-    except (PleaseWaitFewMinutes, FeedbackRequired) as exc:
+    except (PleaseWaitFewMinutes, FeedbackRequired, ClientThrottledError) as exc:
+        logger.warning("instagram rate limited (HTTP 429) user=%s error=%s", username, exc)
         fetch_error = ValueError(
             f"Instagram rate limited the request for '{username}'. "
             f"Wait and try again later, or use a different IP/network: {exc}"
         )
     except ChallengeRequired as exc:
+        logger.error("instagram challenge required (account flagged) user=%s error=%s", username, exc)
         fetch_error = ValueError(
             f"Instagram requires account verification. "
             f"Log in from the official app or browser to resolve the challenge: {exc}"
         )
     except ClientConnectionError as exc:
+        logger.warning("instagram connection error user=%s error=%s", username, exc)
         fetch_error = ValueError(f"Instagram connection error for '{username}': {exc}")
     except ClientError as exc:
         msg = str(exc).lower()
         if "not found" in msg or "user not found" in msg:
+            logger.warning("instagram user not found user=%s", username)
             raise ValueError(f"Instagram user not found: {username}")
+        logger.error("instagram client error user=%s error=%s", username, exc, exc_info=True)
         fetch_error = ValueError(f"Instagram error for '{username}': {exc}")
 
     assert fetch_error is not None
     snapshot = _load_stats_snapshot(config, username)
     if snapshot is not None:
+        logger.warning(
+            "instagram serving stale snapshot user=%s snapshot_fetched_at=%s reason=%s",
+            username, snapshot["fetched_at"], fetch_error,
+        )
         payload = dict(snapshot["data"])
         payload["stale"] = True
         payload["last_fresh_crawl"] = snapshot["fetched_at"]
         payload["fallback_reason"] = str(fetch_error)
         payload["source"] = "instagram_persistent_snapshot_fallback"
         return payload
+    logger.error("instagram no snapshot available to fall back on user=%s reason=%s", username, fetch_error)
     raise fetch_error

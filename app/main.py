@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,10 @@ from typing import Any, Awaitable, Callable, Sequence
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+
+from app.logging_config import configure_logging
+
+configure_logging()
 
 from app.cache import InMemoryCache
 from app.clients.dockerhub_client import fetch_dockerhub_image_stats
@@ -23,6 +28,8 @@ from app.clients.instagram_client import (
     get_instagram_snapshot_status,
     get_instagram_session_status,
 )
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="social-stats",
@@ -54,6 +61,7 @@ async def _wrap_call(call: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str,
     try:
         return await call()
     except Exception as exc:  # noqa: BLE001
+        logger.warning("stats job failed: %s", exc, exc_info=True)
         return {"ok": False, "error": str(exc)}
 
 
