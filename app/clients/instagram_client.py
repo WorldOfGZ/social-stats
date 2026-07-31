@@ -386,6 +386,12 @@ async def fetch_instagram_stats(username: str, timeout_seconds: int, config: Any
 
     try:
         cl = InstagramClient()
+        # aiograpi's UserMixin declares _users_cache/_usernames_cache as mutable
+        # class attributes, so they're shared (and never expire) across every
+        # InstagramClient instance in this process. Shadow them per-instance so
+        # each fetch actually hits the network instead of replaying old data.
+        cl._users_cache = {}
+        cl._usernames_cache = {}
         session_file = Path(status["session_file"])
         try:
             cl.load_settings(str(session_file))

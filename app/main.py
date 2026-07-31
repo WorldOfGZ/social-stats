@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Sequence
 
@@ -15,12 +16,12 @@ from app.logging_config import configure_logging, get_log_file_path
 
 configure_logging()
 
-from app.cache import InMemoryCache
-from app.clients.dockerhub_client import fetch_dockerhub_image_stats
-from app.clients.github_client import fetch_github_repo_stats, fetch_github_user_stats
-from app.clients.youtube_client import fetch_youtube_stats
-from app.config import ConfigError, load_config
-from app.clients.instagram_client import (
+from app.cache import InMemoryCache  # noqa: E402
+from app.clients.dockerhub_client import fetch_dockerhub_image_stats  # noqa: E402
+from app.clients.github_client import fetch_github_repo_stats, fetch_github_user_stats  # noqa: E402
+from app.clients.youtube_client import fetch_youtube_stats  # noqa: E402
+from app.config import ConfigError, load_config  # noqa: E402
+from app.clients.instagram_client import (  # noqa: E402
     clear_instagram_session,
     begin_instagram_session_login,
     complete_instagram_two_factor_login,
@@ -111,23 +112,23 @@ async def aggregate_stats() -> dict[str, Any]:
     config = _get_config()
 
     instagram_jobs = [
-        _wrap_call(lambda username=u: _get_instagram_stats(username, config))
+        _wrap_call(partial(_get_instagram_stats, u, config))
         for u in config.targets.instagram
     ]
     youtube_jobs = [
-        _wrap_call(lambda identifier=i: _get_youtube_stats(identifier, config))
+        _wrap_call(partial(_get_youtube_stats, i, config))
         for i in config.targets.youtube
     ]
     github_user_jobs = [
-        _wrap_call(lambda username=u: _get_github_user_stats(username, config))
+        _wrap_call(partial(_get_github_user_stats, u, config))
         for u in config.targets.github_users
     ]
     github_repo_jobs = [
-        _wrap_call(lambda full_repo=r: _get_github_repo_from_full_name(full_repo, config))
+        _wrap_call(partial(_get_github_repo_from_full_name, r, config))
         for r in config.targets.github_repos
     ]
     dockerhub_jobs = [
-        _wrap_call(lambda full_image=i: _get_dockerhub_image_from_full_name(full_image, config))
+        _wrap_call(partial(_get_dockerhub_image_from_full_name, i, config))
         for i in config.targets.dockerhub_images
     ]
 
