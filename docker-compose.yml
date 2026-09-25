@@ -5,7 +5,7 @@ services:
     environment:
       TZ: Europe/Berlin
     ports:
-      - "8000:8000"
+      - "8010:8010"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./.state:/app/.state
