@@ -13,7 +13,7 @@ class ConfigError(Exception):
 @dataclass(slots=True)
 class ServerConfig:
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8010
     timeout_seconds: int = 12
 
 
@@ -82,7 +82,7 @@ def load_config(path: str | Path) -> AppConfig:
 
     server = ServerConfig(
         host=str(server_raw.get("host", "0.0.0.0")),
-        port=int(server_raw.get("port", 8000)),
+        port=int(server_raw.get("port", 8010)),
         timeout_seconds=int(server_raw.get("timeout_seconds", 12)),
     )
 

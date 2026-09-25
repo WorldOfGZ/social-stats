@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_NOT_CONFIGURED_MESSAGE = (
     "Instagram account is not configured to crawl Instagram accounts. "
-    "Open http://localhost:8000/ and log in with your Instagram account."
+    "Open http://localhost:8010/ and log in with your Instagram account."
 )
 
 _PENDING_LOGIN_TTL_SECONDS = 600
@@ -398,7 +398,7 @@ async def fetch_instagram_stats(username: str, timeout_seconds: int, config: Any
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
             raise ValueError(
                 "Instagram session file is in an incompatible format (old instaloader session). "
-                "Open http://localhost:8000/, click 'Clear Session', then log in again."
+                "Open http://localhost:8010/, click 'Clear Session', then log in again."
             )
 
         async with asyncio.timeout(float(timeout_seconds)):
@@ -433,7 +433,7 @@ async def fetch_instagram_stats(username: str, timeout_seconds: int, config: Any
         logger.error("instagram session invalid or expired user=%s", username)
         raise ValueError(
             "Instagram session is not configured or has expired. "
-            "Open http://localhost:8000/ and log in again."
+            "Open http://localhost:8010/ and log in again."
         )
     except (PleaseWaitFewMinutes, FeedbackRequired, ClientThrottledError) as exc:
         logger.warning("instagram rate limited (HTTP 429) user=%s error=%s", username, exc)

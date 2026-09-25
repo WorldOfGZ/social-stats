@@ -84,7 +84,7 @@ Default schema:
 ```yaml
 server:
 	host: 0.0.0.0
-	port: 8000
+	port: 8010
 	timeout_seconds: 12
 
 cache:
@@ -119,17 +119,17 @@ python3 -m pip install -r requirements.txt
 Start the API:
 
 ```powershell
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+uvicorn api.main:app --host 0.0.0.0 --port 8010
 ```
 
 ```bash
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+uvicorn api.main:app --host 0.0.0.0 --port 8010
 ```
 
 Open:
-- Local UI tester: `http://localhost:8000/`
-- API docs: `http://localhost:8000/docs`
-- Health: `http://localhost:8000/health`
+- Local UI tester: `http://localhost:8010/`
+- API docs: `http://localhost:8010/docs`
+- Health: `http://localhost:8010/health`
 
 The `/` page provides a minimal interface to test:
 - all targets from `config.yaml`
@@ -143,7 +143,7 @@ Caching behavior:
 - repeated calls inside this window reuse cached data instead of scraping/API calls again
 - clear cache manually with `POST /cache/clear` to force next call to scrape/API fetch again
 
-Instagram access requires a logged-in Instaloader session. Use the local tester at `http://localhost:8000/` to sign in with your Instagram credentials; the session is stored in `.state/` and ignored by git.
+Instagram access requires a logged-in Instaloader session. Use the local tester at `http://localhost:8010/` to sign in with your Instagram credentials; the session is stored in `.state/` and ignored by git.
 When running with Docker Compose, the `.state/` folder is mounted into the container, so the session file is visible in the workspace too.
 
 ## 5. Run With Docker
@@ -187,7 +187,7 @@ python -m pip install -r requirements.txt
 6. Start the API again:
 
 ```powershell
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+uvicorn api.main:app --host 0.0.0.0 --port 8010
 ```
 
 ### Docker Compose instance
@@ -213,9 +213,9 @@ docker image prune -f
 
 After update, validate health:
 
-- Local UI tester: `http://localhost:8000/`
-- API docs: `http://localhost:8000/docs`
-- Health: `http://localhost:8000/health`
+- Local UI tester: `http://localhost:8010/`
+- API docs: `http://localhost:8010/docs`
+- Health: `http://localhost:8010/health`
 
 ## 7. Endpoints
 
